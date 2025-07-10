@@ -1,0 +1,34 @@
+# .github/workflows/build.yml
+
+name: Astro Build & Deploy
+
+on:
+  push:
+    branches: [main]  # mainブランチにpushされたとき実行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v3
+
+      - name: Node.js セットアップ
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: パッケージインストール
+        run: npm ci
+
+      - name: Astro ビルド
+        run: npm run build
+
+      - name: S3へデプロイ（オプション）
+        run: |
+          aws s3 sync ./dist s3://your-bucket-name --delete
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ap-northeast-1
