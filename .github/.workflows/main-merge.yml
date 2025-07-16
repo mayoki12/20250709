@@ -1,0 +1,27 @@
+# ② PRをmainにマージする
+name: main-merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: 'Branch to merge'
+        required: true
+
+　jobs:
+  merge_to_main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find PR number
+        id: pr
+        run: |
+          PR_NUMBER=$(gh pr list --head "${{ github.event.inputs.pr_branch }}" --json number -q '.[0].number')
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Merge PR into main
+        run: |
+          gh pr merge ${{ steps.pr.outputs.pr_number }} --merge --admin
+
+
+      
+          
