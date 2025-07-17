@@ -9,6 +9,8 @@ jobs:
   detect_release:
     if: github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v3
 
