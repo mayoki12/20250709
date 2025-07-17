@@ -8,6 +8,10 @@ on:
         description: 'Branch to merge'
         required: true
 
+permissions:
+  pull-requests: write
+  contents: write
+
 jobs:
   merge_to_main:
     runs-on: ubuntu-latest
@@ -21,6 +25,7 @@ jobs:
       - name: Merge PR into main
         run: |
           gh pr merge ${{ steps.pr.outputs.pr_number }} --merge --admin
+
 
 
       
