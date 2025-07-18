@@ -15,6 +15,8 @@ permissions:
 jobs:
   merge_to_main:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Find PR number
         id: pr
@@ -25,8 +27,3 @@ jobs:
       - name: Merge PR into main
         run: |
           gh pr merge ${{ steps.pr.outputs.pr_number }} --merge --admin
-
-
-
-      
-          
