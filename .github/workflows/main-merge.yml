@@ -18,10 +18,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Find PR number
         id: pr
         run: |
           PR_NUMBER=$(gh pr list --head "${{ github.event.inputs.pr_branch }}" --json number -q '.[0].number')
+          echo "pr_number=$PR_NUMBER"
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
       - name: Merge PR into main
