@@ -5,29 +5,34 @@ on:
   workflow_dispatch:
     inputs:
       pr_branch:
-        description: 'Branch to merge'
+        description: 'Branch to merge (e.g. release/20250719)'
         required: true
 
 permissions:
-  pull-requests: write
   contents: write
 
 jobs:
-  merge_to_main:
+  merge_force_pr:
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout repository
+      - name: Checkout main
         uses: actions/checkout@v3
+        with:
+          ref: main
 
-      - name: Find PR number
-        id: pr
+      - name: Set up Git
         run: |
-          PR_NUMBER=$(gh pr list --head "${{ github.event.inputs.pr_branch }}" --json number -q '.[0].number')
-          echo "pr_number=$PR_NUMBER"
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge PR into main
+      - name: Fetch PR branch
         run: |
-          gh pr merge ${{ steps.pr.outputs.pr_number }} --merge --admin
+          git fetch origin ${{ github.event.inputs.pr_branch }}:${{ github.event.inputs.pr_branch }}
+
+      - name: Merge PR branch forcefully (prefer PR changes)
+        run: |
+          git merge -X theirs origin/${{ github.event.inputs.pr_branch }} --no-edit || true
+
+      - name: Push merged main
+        run: |
+          git push origin HEAD:main
