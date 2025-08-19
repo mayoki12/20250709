@@ -1,0 +1,38 @@
+# ② PRをmainにマージする
+name: main-merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: 'Branch to merge (e.g. release/20250719)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  merge_force_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v3
+        with:
+          ref: main
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch PR branch
+        run: |
+          git fetch origin ${{ github.event.inputs.pr_branch }}:${{ github.event.inputs.pr_branch }}
+
+      - name: Merge PR branch forcefully (prefer PR changes)
+        run: |
+          git merge -X theirs origin/${{ github.event.inputs.pr_branch }} --no-edit || true
+
+      - name: Push merged main
+        run: |
+          git push origin HEAD:main
