@@ -1,46 +1,70 @@
-# ① PR承認時、即時or予約リリース判定
+# ① PR承認時、即時 or 予約リリース判定
 name: detect-release-type
-
 on:
   pull_request_review:
     types: [submitted]
 
+permissions:
+  contents: read
+  actions: write  # gh workflow run に必要
+
 jobs:
   detect_release:
-    if: github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main'
+    if: >
+      github.event.review.state == 'approved' &&
+      github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v3
 
-      - name: Check release.txt existence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PRのheadをそのまま取得（release.txtを正しく読む）
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Read release.txt (exists?)
         id: check_release
         run: |
           if [ -f ./release.txt ]; then
-            echo "found=true" >> $GITHUB_OUTPUT
-            echo "release_time=$(cat ./release.txt)" >> $GITHUB_OUTPUT
+            ts=$(tr -d '\r' < ./release.txt)  # 例: 2025-08-21T01:00:00Z
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "release_time=$ts" >> "$GITHUB_OUTPUT"
           else
-            echo "found=false" >> $GITHUB_OUTPUT
+            echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Get PR branch name
+      - name: Get PR branch
         id: pr_branch
-        run: |
-          echo "pr_branch=${GITHUB_HEAD_REF:-${{ github.event.pull_request.head.ref }}}" >> $GITHUB_OUTPUT
+        run: echo "pr_branch=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_OUTPUT"
 
-      - name: Register EventBridge if scheduled
+      - name: Make schedule name
+        id: sched
+        run: echo "name=release-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+
+      # 予約あり → EventBridge Scheduler でLambda起動を予約
+      - name: Configure AWS
+        if: steps.check_release.outputs.found == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Register one-off schedule (Scheduler→Lambda)
         if: steps.check_release.outputs.found == 'true'
         run: |
-          aws events put-rule \
-            --name "release-schedule-$(date +%s)" \
-            --schedule-expression "at(${{ steps.check_release.outputs.release_time }})"
+          aws scheduler create-schedule \
+            --name "${{ steps.sched.outputs.name }}" \
+            --schedule-expression "at(${{ steps.check_release.outputs.release_time }})" \
+            --flexible-time-window '{"Mode":"OFF"}' \
+            --target '{
+              "Arn": "'"${{ secrets.LAMBDA_ARN }}"'",
+              "RoleArn": "'"${{ secrets.SCHEDULER_ROLE_ARN }}"'",
+              "Input": "{\"ownerRepo\":\"'${{ github.repository }}'\",\"workflow\":\"main-merge.yml\",\"pr_branch\":\"'${{ steps.pr_branch.outputs.pr_branch }}'\"}"
+            }'
 
-          aws events put-targets \
-            --rule "release-schedule-$(date +%s)" \
-            --targets "[{\"Id\":\"1\",\"Arn\":\"${{ secrets.LAMBDA_ARN }}\",\"Input\":\"{\\\"PR_BRANCH\\\":\\\"${{ steps.pr_branch.outputs.pr_branch }}\\\"}\"}]"
-
-      - name: Trigger immediate deploy if no schedule
+      # 予約なし → すぐ②( main-merge ) を起動
+      - name: Trigger immediate merge (no schedule)
         if: steps.check_release.outputs.found == 'false'
-        run: |
-          gh workflow run main-merge.yml -f pr_branch=${{ steps.pr_branch.outputs.pr_branch }}
+        run: gh workflow run main-merge.yml -f pr_branch='${{ steps.pr_branch.outputs.pr_branch }}'
