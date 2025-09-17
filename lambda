@@ -1,0 +1,42 @@
+// index.mjs  // Runtime: Node.js 20.x / Handler: index.handler
+import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+
+const sm = new SecretsManagerClient({});
+// 環境変数: GH_DISPATCH_TOKEN_SECRET = "github/dispatch/token" など（Secrets Manager の名前 or ARN）
+const SECRET_NAME = process.env.GH_DISPATCH_TOKEN_SECRET;
+
+async function getToken() {
+  if (!SECRET_NAME) throw new Error("Env GH_DISPATCH_TOKEN_SECRET is not set");
+  const r = await sm.send(new GetSecretValueCommand({ SecretId: SECRET_NAME }));
+  if (!r.SecretString) throw new Error("Secret has no SecretString");
+  return r.SecretString;
+}
+
+export const handler = async (event) => {
+  const { ownerRepo, workflow, pr_branch } = event || {};
+  if (!ownerRepo || !workflow || !pr_branch) {
+    throw new Error("Missing fields: ownerRepo, workflow, pr_branch");
+  }
+
+  const [owner, repo] = ownerRepo.split("/");
+  const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches`;
+
+  const token = await getToken();
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Accept": "application/vnd.github+json",
+      "Authorization": `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ref: "main", inputs: { pr_branch } }),
+  });
+
+  if (res.status !== 204) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`workflow_dispatch failed: ${res.status} ${text}`);
+  }
+  return { ok: true, pr_branch };
+};
