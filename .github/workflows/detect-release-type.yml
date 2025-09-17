@@ -108,4 +108,4 @@ jobs:
       # 予約なし または 無効な日時 → すぐ②( main-merge ) を起動
       - name: Trigger immediate merge (no or invalid schedule)
         if: steps.schedule.outputs.found == 'false'
-        run: gh workflow run main-merge.yml -f pr_branch='${{ steps.pr_branch.outputs.pr_branch }}'
+        run: gh workflow run main-merge.yml -R '${{ github.repository }}' -f pr_branch='${{ steps.pr_branch.outputs.pr_branch }}'
