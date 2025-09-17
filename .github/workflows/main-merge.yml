@@ -8,16 +8,34 @@ on:
         description: 'Branch to merge'
         required: true
 
-　jobs:
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
   merge_to_main:
     runs-on: ubuntu-latest
-    steps:
-      - name: Find PR number
-        id: pr
-        run: |
-          PR_NUMBER=$(gh pr list --head "${{ github.event.inputs.pr_branch }}" --json number -q '.[0].number')
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Merge PR into main
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find PR number (open/base=main/head={input})
+        id: pr
+        shell: bash
         run: |
-          gh pr merge ${{ steps.pr.outputs.pr_number }} --merge --admin
+          set -euo pipefail
+          BR="${{ github.event.inputs.pr_branch }}"
+          PR_NUMBER=$(gh pr list --state open --base main --head "$BR" --json number -q '.[0].number' || true)
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            echo "No open PR found for head '$BR' targeting base 'main'." >&2
+            exit 1
+          fi
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Merge PR into main (merge commit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr merge "${{ steps.pr.outputs.pr_number }}" --merge # --auto の採用も可
