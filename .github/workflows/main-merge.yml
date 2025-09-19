@@ -15,8 +15,10 @@ permissions:
 jobs:
   merge_to_main:
     runs-on: ubuntu-latest
+
+    # 検索など通常の gh 操作は GITHUB_TOKEN でOK
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # gh CLI 認証
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +39,10 @@ jobs:
           fi
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
-      - name: Merge PR into main (merge commit)
+      - name: Merge PR into main (merge commit with PAT)
+        # ← ここだけ PAT に切替（この push は人間/ボット名義になり on:push が起動）
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT_MERGE }}   # ★リポのSecretsに作成しておく
         shell: bash
         run: |
           set -euo pipefail
@@ -46,5 +51,6 @@ jobs:
             --merge \
             --subject "CI: merge PR #$PR into main" \
             --body ""
-          # ブランチ保護で待たせたい場合は --auto を併用可:
-          # gh pr merge ... --merge --auto
+          # もしブランチ保護の必須チェック待ちをしたいなら --auto も併用可:
+          # gh pr merge -R "$GITHUB_REPOSITORY" "$PR" --merge --auto \
+          #   --subject "CI: merge PR #$PR into main" --body ""
