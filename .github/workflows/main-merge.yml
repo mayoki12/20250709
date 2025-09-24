@@ -40,9 +40,8 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Merge PR into main (merge commit with PAT)
-        # ← ここだけ PAT に切替（この push は人間/ボット名義になり on:push が起動）
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT_MERGE }}   # ★リポのSecretsに作成しておく
+          GH_TOKEN: ${{ secrets.GH_PAT_MERGE }} 
         shell: bash
         run: |
           set -euo pipefail
