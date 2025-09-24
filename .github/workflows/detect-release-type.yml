@@ -1,4 +1,4 @@
-# ① PR承認時、即時 or 予約リリース判定（PR本文の release_at: のみで判定） + OIDC 版
+# ① PR承認時、即時 or 予約リリース判定（PR本文の release_at: のみで判定）/ JST対応 / OIDC
 name: detect-release-type
 
 on:
@@ -10,11 +10,11 @@ permissions:
   actions: write
   issues: write
   pull-requests: write
-  id-token: write            # ★ OIDC に必須
+  id-token: write        # OIDC で必須
 
 jobs:
   detect_release:
-    # 承認レビュー かつ base が main のときだけ動く
+    # 承認レビュー かつ base が main のときだけ実行
     if: >
       github.event.review.state == 'approved' &&
       github.event.pull_request.base.ref == 'main'
@@ -23,9 +23,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      # PR本文から予約日時を抽出（release_at: のみ／UTC Z 必須）
-      # コメント行や例（<!-- -->）は無視。行頭の release_at: のみ読む。
-      - name: Extract schedule from PR body
+      # ===== 1) PR本文から JST の release_at を抽出・検証 =====
+      - name: Extract schedule from PR body (JST allowed)
         id: schedule
         shell: bash
         env:
@@ -34,42 +33,54 @@ jobs:
           set -euo pipefail
           body="${PR_BODY:-}"
 
-          # HTMLコメントを除去してから判定（例: <!-- release_at: ... --> を無視）
+          # HTMLコメントを除去（<!-- ... --> は無視）
           clean=$(printf "%s" "$body" | perl -0777 -pe 's/<!--.*?-->//gs')
 
-          # 有効な日時（行頭固定）
-          candidate=$(printf "%s\n" "$clean" | grep -Eo \
-            '^[[:space:]]*release_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z[[:space:]]*$' \
+          # 完全に空の release_at: 行があるか？
+          if printf "%s\n" "$clean" | grep -qE '^[[:space:]]*release_at:[[:space:]]*$'; then
+            echo "found=false"  >> "$GITHUB_OUTPUT"
+            echo "error=Empty release_at (no datetime provided)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 日付を含む release_at: 行を取得（末尾にZ/+09:00等あっても良い）
+          line=$(printf "%s\n" "$clean" | grep -Eo \
+            '^[[:space:]]*release_at:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?([zZ]|([+-][0-9]{2}:[0-9]{2}))?[[:space:]]*$' \
             | tail -n1 || true)
 
-          if [ -n "${candidate:-}" ]; then
-            ts=$(printf "%s" "$candidate" | sed -E 's/^release_at:[[:space:]]*//')
-            utc=$(date -u -d "$ts" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
-            if [ -n "${utc:-}" ]; then
-              now=$(date -u +%s); when=$(date -u -d "$utc" +%s)
-              if [ "$when" -le "$now" ]; then
-                echo "found=false"  >> "$GITHUB_OUTPUT"
-                echo "error=Schedule time is in the past: $utc" >> "$GITHUB_OUTPUT"
-              else
-                echo "found=true"   >> "$GITHUB_OUTPUT"
-                echo "release_time=$utc" >> "$GITHUB_OUTPUT"   # 例: 2025-09-21T12:00:00Z
-                echo "error="       >> "$GITHUB_OUTPUT"
-              fi
-            else
-              echo "found=false"    >> "$GITHUB_OUTPUT"
-              echo "error=Invalid datetime format: $ts" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            # 空の release_at: 行を不正扱いに
-            if printf "%s\n" "$clean" | grep -qE '^[[:space:]]*release_at:[[:space:]]*$'; then
-              echo "found=false"    >> "$GITHUB_OUTPUT"
-              echo "error=Empty release_at (no datetime provided)" >> "$GITHUB_OUTPUT"
-            else
-              # 記法自体が無い → 即時
-              echo "found=false"    >> "$GITHUB_OUTPUT"
-              echo "error="         >> "$GITHUB_OUTPUT"
-            fi
+          # 記法がそもそも無い → 即時リリース
+          if [ -z "${line:-}" ]; then
+            echo "found=false"  >> "$GITHUB_OUTPUT"
+            echo "error="       >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # 値のみ
+          ts=$(printf "%s" "$line" | sed -E 's/^[[:space:]]*release_at:[[:space:]]*//')
+
+          # 入力を JST として解釈（Z/オフセット付きなら date が良きに変換）
+          epoch_jst=$(TZ=Asia/Tokyo date -d "$ts" +%s 2>/dev/null || true)
+          if [ -z "${epoch_jst:-}" ]; then
+            echo "found=false"  >> "$GITHUB_OUTPUT"
+            echo "error=Invalid datetime format (expected JST like YYYY-MM-DD HH:MM or ISO8601)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          now_jst=$(TZ=Asia/Tokyo date +%s)
+          if [ "$epoch_jst" -le "$now_jst" ]; then
+            echo "found=false"  >> "$GITHUB_OUTPUT"
+            echo "error=Schedule time is in the past (JST)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 後続用（cron に分解）と表示用
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "jst_min=$(TZ=Asia/Tokyo date -d "@$epoch_jst" +%M)"  >> "$GITHUB_OUTPUT"
+          echo "jst_hour=$(TZ=Asia/Tokyo date -d "@$epoch_jst" +%H)" >> "$GITHUB_OUTPUT"
+          echo "jst_dom=$(TZ=Asia/Tokyo date -d "@$epoch_jst" +%d)"  >> "$GITHUB_OUTPUT"
+          echo "jst_mon=$(TZ=Asia/Tokyo date -d "@$epoch_jst" +%m)"  >> "$GITHUB_OUTPUT"
+          echo "jst_year=$(TZ=Asia/Tokyo date -d "@$epoch_jst" +%Y)" >> "$GITHUB_OUTPUT"
+          echo "release_time_jst=$(TZ=Asia/Tokyo date -d "@$epoch_jst" +%Y-%m-%dT%H:%M:%S%z)" >> "$GITHUB_OUTPUT"
 
       - name: Get PR branch
         id: pr_branch
@@ -79,7 +90,7 @@ jobs:
         id: sched
         run: echo "name=release-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
 
-      # 必要ラベル（なければ作成）
+      # ===== 2) ラベル整備 =====
       - name: Ensure labels exist
         run: |
           set -euo pipefail
@@ -87,72 +98,71 @@ jobs:
           gh label create 'release:immediate' --color '1D76DB' --description 'Immediate release' --force || true
           gh label create 'release:invalid'   --color 'B60205' --description 'Invalid/expired schedule' --force || true
 
-      # ラベリング：予約OK
-      - name: Label PR as scheduled + comment
+      - name: Label PR as scheduled + comment (JST)
         if: steps.schedule.outputs.found == 'true'
         env:
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          WHEN: ${{ steps.schedule.outputs.release_time }}
+          PR:   ${{ github.event.pull_request.number }}
+          WHEN: ${{ steps.schedule.outputs.release_time_jst }}
         run: |
           set -euo pipefail
           gh pr edit "$PR" -R "$REPO" --add-label 'release:scheduled' \
                                       --remove-label 'release:immediate' \
                                       --remove-label 'release:invalid' || true
-          gh pr comment "$PR" -R "$REPO" --body ":alarm_clock: 予約公開を検出: **$WHEN** (UTC)"
+          gh pr comment "$PR" -R "$REPO" --body ":alarm_clock: 予約公開(JST)を検出: **$WHEN**"
 
-      # ラベリング：記法なし（即時）
       - name: Label PR as immediate (no schedule)
         if: steps.schedule.outputs.found == 'false' && steps.schedule.outputs.error == ''
         env:
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
+          PR:   ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           gh pr edit "$PR" -R "$REPO" --add-label 'release:immediate' \
                                       --remove-label 'release:scheduled' \
                                       --remove-label 'release:invalid' || true
 
-      # ラベリング：不正（空/不正/過去）→ マージしない
       - name: Label PR as invalid (format/past)
         if: steps.schedule.outputs.found == 'false' && steps.schedule.outputs.error != ''
         env:
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          ERR: ${{ steps.schedule.outputs.error }}
+          PR:   ${{ github.event.pull_request.number }}
+          ERR:  ${{ steps.schedule.outputs.error }}
         run: |
           set -euo pipefail
           gh pr edit "$PR" -R "$REPO" --add-label 'release:invalid' \
                                       --remove-label 'release:scheduled' \
                                       --remove-label 'release:immediate' || true
-          gh pr comment "$PR" -R "$REPO" --body ":warning: 予約指定が無効です（$ERR）。このPRは**マージしません**。`release_at: YYYY-MM-DDThh:mm:ssZ` で再指定してください。"
+          gh pr comment "$PR" -R "$REPO" --body ":warning: 予約指定が無効です（$ERR）。このPRは**マージしません**。`release_at: YYYY-MM-DD HH:MM`（JST）で再指定してください。"
 
-      # 予約あり → OIDC で AWS 認証し、Scheduler に一回限りのスケジュール登録
+      # ===== 3) 予約あり → OIDC で AWS 認証し、Scheduler に「JST指定の cron」で 1 回限り登録 =====
       - name: Configure AWS via OIDC (caller for Scheduler)
         if: steps.schedule.outputs.found == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_SCHEDULER_CALLER }}  # ロールA
+          role-to-assume: ${{ vars.AWS_ROLE_SCHEDULER_CALLER }}  # ロールA（GitHub→AWS）
           aws-region:     ${{ vars.AWS_REGION }}
 
-      - name: Register one-off schedule (Scheduler→Lambda)
+      - name: Register one-off schedule (cron in JST)
         if: steps.schedule.outputs.found == 'true'
         env:
-          ROLE_ARN:   ${{ vars.SCHEDULER_ROLE_ARN }}   # ロールB（Scheduler Target Role）
+          ROLE_ARN:   ${{ vars.SCHEDULER_ROLE_ARN }}   # ロールB（Scheduler→Lambda の Target Role）
           LAMBDA_ARN: ${{ vars.LAMBDA_ARN }}
           OWNER_REPO: ${{ github.repository }}
           PR_BRANCH:  ${{ steps.pr_branch.outputs.pr_branch }}
           SCHED_NAME: ${{ steps.sched.outputs.name }}
-          WHEN_UTC:   ${{ steps.schedule.outputs.release_time }}  # 例: 2025-09-21T12:00:00Z
+          M:  ${{ steps.schedule.outputs.jst_min }}
+          H:  ${{ steps.schedule.outputs.jst_hour }}
+          D:  ${{ steps.schedule.outputs.jst_dom }}
+          MO: ${{ steps.schedule.outputs.jst_mon }}
+          Y:  ${{ steps.schedule.outputs.jst_year }}
         run: |
           set -euo pipefail
           test -n "${ROLE_ARN:-}"   || { echo "::error ::SCHEDULER_ROLE_ARN is empty"; exit 1; }
           test -n "${LAMBDA_ARN:-}" || { echo "::error ::LAMBDA_ARN is empty"; exit 1; }
 
-          # Scheduler の at() は Z を受け付けないため、Z を外して渡す（UTCのまま）
-          WHEN_NOZ="${WHEN_UTC%Z}"                       # → 2025-09-21T12:00:00
-          # さらに堅くするなら下記の1行に置き換え：
-          # WHEN_NOZ=$(date -u -d "${WHEN_UTC}" +%Y-%m-%dT%H:%M:%S)
+          # Quartz 形式：分 時 日 月 曜日(固定 ?) 年  → 年を指定して 1 回だけ発火
+          cron="cron(${M} ${H} ${D} ${MO} ? ${Y})"
 
           cat > target.json <<EOF
           {
@@ -164,11 +174,12 @@ jobs:
 
           aws scheduler create-schedule \
             --name "${SCHED_NAME}" \
-            --schedule-expression "at(${WHEN_NOZ})" \
+            --schedule-expression "${cron}" \
+            --schedule-expression-timezone "Asia/Tokyo" \
             --flexible-time-window '{"Mode":"OFF"}' \
             --target file://target.json
 
-      # 即時（記法なし＝errorが空のときのみ）→ ②を main 参照で起動
+      # ===== 4) 予約なし（記法なしのみ）→ ②を即時起動 =====
       - name: Trigger immediate merge (no schedule)
         if: steps.schedule.outputs.found == 'false' && steps.schedule.outputs.error == ''
         run: |
@@ -177,7 +188,7 @@ jobs:
             --ref main \
             -f pr_branch='${{ steps.pr_branch.outputs.pr_branch }}'
 
-      # 不正は終了（マージしない）
+      # ===== 5) 不正は終了（マージしない） =====
       - name: Stop on invalid schedule (labelled only)
         if: steps.schedule.outputs.found == 'false' && steps.schedule.outputs.error != ''
         run: echo "::warning ::Invalid schedule detected. Merge is skipped."
