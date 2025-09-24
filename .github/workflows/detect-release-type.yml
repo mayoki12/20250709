@@ -1,4 +1,4 @@
-# ① PR承認時、即時 or 予約リリース判定（PR本文の release_at: のみで判定） 
+# ① PR承認時、即時 or 予約リリース判定（PR本文の release_at: のみで判定） + OIDC 版
 name: detect-release-type
 
 on:
@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   detect_release:
+    # 承認レビュー かつ base が main のときだけ動く
     if: >
       github.event.review.state == 'approved' &&
       github.event.pull_request.base.ref == 'main'
@@ -51,7 +52,7 @@ jobs:
                 echo "error=Schedule time is in the past: $utc" >> "$GITHUB_OUTPUT"
               else
                 echo "found=true"   >> "$GITHUB_OUTPUT"
-                echo "release_time=$utc" >> "$GITHUB_OUTPUT"
+                echo "release_time=$utc" >> "$GITHUB_OUTPUT"   # 例: 2025-09-21T12:00:00Z
                 echo "error="       >> "$GITHUB_OUTPUT"
               fi
             else
@@ -142,11 +143,16 @@ jobs:
           OWNER_REPO: ${{ github.repository }}
           PR_BRANCH:  ${{ steps.pr_branch.outputs.pr_branch }}
           SCHED_NAME: ${{ steps.sched.outputs.name }}
-          WHEN_UTC:   ${{ steps.schedule.outputs.release_time }}
+          WHEN_UTC:   ${{ steps.schedule.outputs.release_time }}  # 例: 2025-09-21T12:00:00Z
         run: |
           set -euo pipefail
           test -n "${ROLE_ARN:-}"   || { echo "::error ::SCHEDULER_ROLE_ARN is empty"; exit 1; }
           test -n "${LAMBDA_ARN:-}" || { echo "::error ::LAMBDA_ARN is empty"; exit 1; }
+
+          # Scheduler の at() は Z を受け付けないため、Z を外して渡す（UTCのまま）
+          WHEN_NOZ="${WHEN_UTC%Z}"                       # → 2025-09-21T12:00:00
+          # さらに堅くするなら下記の1行に置き換え：
+          # WHEN_NOZ=$(date -u -d "${WHEN_UTC}" +%Y-%m-%dT%H:%M:%S)
 
           cat > target.json <<EOF
           {
@@ -158,7 +164,7 @@ jobs:
 
           aws scheduler create-schedule \
             --name "${SCHED_NAME}" \
-            --schedule-expression "at(${WHEN_UTC})" \
+            --schedule-expression "at(${WHEN_NOZ})" \
             --flexible-time-window '{"Mode":"OFF"}' \
             --target file://target.json
 
